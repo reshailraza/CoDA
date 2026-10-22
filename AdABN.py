@@ -211,7 +211,7 @@ def run_adabn_full_analysis():
     # --------------------------------------------------------
     # Dataset
     # --------------------------------------------------------
-    x_adapt = tf.cast(x_test_20_2d[:475], tf.float32)
+    x_adapt = tf.cast(x_train_20_2d[:475], tf.float32)
     dataset = tf.data.Dataset.from_tensor_slices(x_adapt).batch(8)
 
     # --------------------------------------------------------
