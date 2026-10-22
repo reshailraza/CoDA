@@ -412,7 +412,7 @@ def run_coda_full_experiment():
     pretrained_model.compile(optimizer=Adam(learning_rate=1e-5), loss="mse")
 
     # Adaptation dataset (target domain, unlabeled)
-    x_adapt = tf.cast(x_test_20_2d[:475], tf.float32)
+    x_adapt = tf.cast(x_train_20_2d[:475], tf.float32)
     dataset = tf.data.Dataset.from_tensor_slices(x_adapt).batch(8)
 
     # ---- Save source (pretrained) BN state ----
