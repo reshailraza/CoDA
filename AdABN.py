@@ -164,9 +164,10 @@ def compute_layer_wise_alignment(stats_A, stats_B):
 # ADA-BN APPLICATION
 # ============================================================
 
-def apply_adabn(model, target_stats, momentum_blend=0.7):
+def apply_adabn(model, target_stats, momentum_blend=1.0):
     """
-    Stable AdaBN injection.
+    AdaBN injection. momentum_blend=1.0 is standard AdaBN (target statistics fully replace the source ones);
+    the earlier 0.7 default kept 30% source statistics and is not AdaBN.
     Instead of hard overwrite, blend stats to avoid collapse.
     """
 
@@ -203,6 +204,11 @@ def run_adabn_full_analysis():
         layer.trainable = False
 
     bn_layers = [l for l in model.layers if isinstance(l, tf.keras.layers.BatchNormalization)]
+    # BN layers must stay trainable here. In TF2/Keras a BatchNormalization layer with trainable=False runs in
+    # inference mode even when called with training=True, so no target statistics were collected and the old
+    # version injected moving_mean = 0 (with the source variances) into all 42 BN layers. No gradient step is taken.
+    for l in bn_layers:
+        l.trainable = True
 
     print("\n" + "="*70)
     print(f"ADA-BN MODE | BN layers: {len(bn_layers)}")
@@ -227,6 +233,7 @@ def run_adabn_full_analysis():
     # --------------------------------------------------------
     print("\n[ADABN] Computing target BN statistics...")
     target_stats = compute_empirical_bn_statistics(model, dataset)
+    assert any(np.abs(t[0] - sc[0]).max() > 0 for t, sc in zip(target_stats, source_stats)), 'target BN statistics were not collected'
 
     # --------------------------------------------------------
     # Alignment BEFORE adaptation

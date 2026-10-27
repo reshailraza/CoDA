@@ -6,6 +6,13 @@ from tensorflow.keras.layers import BatchNormalization
 from tensorflow.keras.optimizers import Adam
 from scipy.stats import pearsonr
 from helper_20_1 import *
+from keras import backend  # was only defined in an interactive session
+np.random.seed(19)  # same seed as AdABN.py / TenT.py so that all methods share one split
+NOISE_STD = 0.05  # perturbation std of the consistency loss (Table 5); previously hard-coded to 0.02 in coda_step
+N_ITERATIONS = 50  # number of OPTIMIZER STEPS (Table 5: 'Iterations (CoDA) = 50'); each step uses the next batch of the unlabeled pool. The old loop ran 50 EPOCHS over the pool (3000 steps for 475 samples), which drove the small mu_a output scale gamma to ~0 and flattened the mu_a map; the saved models of the original runs show a drift of only ~5e-4 = 50 steps.
+FREEZE_OUTPUT_BN_AFFINE = False  # False = original CoDA (reported results). True keeps gamma/beta of the two output BN layers fixed in the consistency step (EMA statistics still adapt).
+# Reason: the consistency loss is smallest for an output that ignores its input, and Adam moves every parameter by about lr per step, so the
+# small mu_a output scale gamma (~1e-2) was driven to ~1e-4 and the mu_a map became flat (CSD mu_a < 0). Set False to reproduce the old behaviour.
 backend.set_image_data_format('channels_first')
 print(backend.image_data_format())
 smooth = 1.
@@ -181,7 +188,7 @@ def compute_delta_affine(model, x, target_affine):
         return float(np.mean(diffs))
     return float(np.mean((pred_orig.numpy() - pred_variant.numpy()) ** 2))
 
-def obtain_target_affine_via_consistency(model, dataset, iterations=50, lr=1e-5, noise_std=0.02):
+def obtain_target_affine_via_consistency(model, dataset, iterations=50, lr=1e-5, noise_std=NOISE_STD):
     """
     Estimate target-domain BN affine parameters (gamma^T, beta^T) using the
     consistency-driven objective alone, on a CLONE of `model`, while holding
@@ -221,9 +228,9 @@ def obtain_target_affine_via_consistency(model, dataset, iterations=50, lr=1e-5,
         optimizer.apply_gradients(grads_vars)
         return loss
 
-    for _ in range(iterations):
-        for batch in dataset:
-            affine_step(batch)
+    batches = list(dataset)
+    for it in range(iterations):                      # one optimizer step per iteration (same budget as CoDA)
+        affine_step(batches[it % len(batches)])
 
     target_affine = [(l.gamma.numpy().copy(), l.beta.numpy().copy()) for l in bn_layers]
 
@@ -453,9 +460,13 @@ def run_coda_full_experiment():
     # ============================================================
     print("\n[Step 3] Running CoDA adaptation (EMA statistics + consistency-driven affine)...")
 
+    out_affine = [v for l in bn_layers[-2:] for v in (l.gamma, l.beta)] if FREEZE_OUTPUT_BN_AFFINE else []
+    train_vars = [v for v in pretrained_model.trainable_weights if not any(v is w for w in out_affine)]
+    print(f"  Trainable affine tensors in the consistency step: {len(train_vars)} (output-BN frozen: {FREEZE_OUTPUT_BN_AFFINE})")
+
     @tf.function
     def coda_step(x):
-        noise = tf.random.normal(tf.shape(x), stddev=0.02)
+        noise = tf.random.normal(tf.shape(x), stddev=NOISE_STD)
         with tf.GradientTape() as tape:
             p1 = pretrained_model(x, training=True)
             p2 = pretrained_model(x + noise, training=True)
@@ -463,18 +474,16 @@ def run_coda_full_experiment():
                 loss = tf.add_n([tf.reduce_mean(tf.square(a - b)) for a, b in zip(p1, p2)])
             else:
                 loss = tf.reduce_mean(tf.square(p1 - p2))
-        grads = tape.gradient(loss, pretrained_model.trainable_weights)
-        grads_vars = [(g, v) for g, v in zip(grads, pretrained_model.trainable_weights) if g is not None]
+        grads = tape.gradient(loss, train_vars)
+        grads_vars = [(g, v) for g, v in zip(grads, train_vars) if g is not None]
         pretrained_model.optimizer.apply_gradients(grads_vars)
         return loss
 
-    N_CYCLES = 50
-    for epoch in range(N_CYCLES):
-        epoch_losses = []
-        for batch in dataset:
-            epoch_losses.append(coda_step(batch).numpy())
-        if (epoch + 1) % 10 == 0 or epoch == 0:
-            print(f"  Epoch {epoch + 1:3d}/{N_CYCLES} | Avg consistency loss: {np.mean(epoch_losses):.6f}")
+    batches = list(dataset)
+    for it in range(N_ITERATIONS):                    # N_ITERATIONS optimizer steps, cycling through the batches of the pool
+        loss_it = coda_step(batches[it % len(batches)]).numpy()
+        if (it + 1) % 10 == 0 or it == 0:
+            print(f"  Iteration {it + 1:3d}/{N_ITERATIONS} | consistency loss: {loss_it:.6f}")
 
     # ============================================================
     # STEP 4 — Post-adaptation measurements (Table 8, Table 10, correlation)
