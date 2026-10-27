@@ -11,7 +11,7 @@ OUT = os.path.join(HERE, "extra_summary"); os.makedirs(OUT, exist_ok=True)
 R = lambda ar: os.path.join(HERE, "runs", "R_" + ar, "results")
 
 # ---- A: statistics-weight sweep
-A = pd.concat([pd.read_csv(os.path.join(R(ar), "sweepA_%s.csv" % ar)) for ar in ARS])
+A = pd.concat([pd.read_csv(os.path.join(R(ar), "sweepA_%s.csv" % ar), dtype={"AR": str}) for ar in ARS])
 A.to_csv(os.path.join(OUT, "sweepA_statistics_weight.csv"), index=False)
 print(A.groupby("n")[["w", "ssim_a", "csd_a", "rmse_a", "cnr", "loc_mm"]].mean().round(3).to_string())
 fig, axes = plt.subplots(1, 4, figsize=(15, 3.3))
